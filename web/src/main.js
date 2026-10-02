@@ -145,7 +145,7 @@ if (FILM) mode = new Film(ctx);
 else mode = new Game(ctx);
 ctx.sound = new Sound(burn);
 
-window.__burn = burn; window.__ball = ball; window.__direct = () => { renderer.setRenderTarget(null); renderer.render(scene, camera); };
+
 window.__ready = true;
 if (!RENDER) {
   let last = performance.now();
