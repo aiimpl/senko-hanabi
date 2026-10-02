@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { blackbodyGLSL } from './color.js';
 
-const MAXSEG = 90000;
+const MAXSEG = 200000;
 
 export class Sparks {
   constructor() {
@@ -102,9 +102,11 @@ export class Sparks {
       for (let k = 0; k < ns; k++) {
         const tm = s0 + (s1 - s0) * (k + 0.5) / ns;
         const a = (tm - tb) / life;
-        // a droplet heats as it flies until it bursts; the last ones cool and fade
-        const h = bursts ? 0.5 + 0.5 * Math.pow(a, 1.4) : Math.pow(1 - a, 1.6);
-        const T = bursts ? 1290 + 50 * a : 1330 - 260 * a;
+        // a droplet heats as it flies until it bursts (the first one leaves the ball dim); the last ones cool and fade
+        const g = burn.gen[i];
+        const h0 = g === 0 ? 0.15 : 0.45;
+        const h = bursts ? h0 + (1 - h0) * Math.pow(a, 1.4) : Math.pow(1 - a, 1.6);
+        const T = bursts ? 1215 + 60 * a : 1270 - 240 * a;
         const tw = tail > 0 ? Math.pow((tm - t0) / S, tail) * (tail + 1) : 1;
         const en = P * h * tw * (s1 - s0) / ns;
         A[n * 3] = tmp[k * 3]; A[n * 3 + 1] = tmp[k * 3 + 1]; A[n * 3 + 2] = tmp[k * 3 + 2];
@@ -117,8 +119,8 @@ export class Sparks {
       if (bursts && td > t0 && td <= t) {
         burn.pos(i, td, tmp, 0);
         A[n * 3] = B[n * 3] = tmp[0]; A[n * 3 + 1] = B[n * 3 + 1] = tmp[1]; A[n * 3 + 2] = B[n * 3 + 2] = tmp[2];
-        E[n * 3] = P * 0.0022; E[n * 3 + 1] = 1340; E[n * 3 + 2] = 3;
-        power += P * 0.0022;
+        E[n * 3] = P * 0.0009; E[n * 3 + 1] = 1300; E[n * 3 + 2] = 3;
+        power += P * 0.0009;
         n++;
       }
     }

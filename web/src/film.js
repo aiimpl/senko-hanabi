@@ -6,7 +6,9 @@
 const SHOTS = [
   // cold open: the peak of the pine needles, so the first second already shows what this is
   { len: 2.4, b0: 16.6, b1: 19.0, cam: { d: 0.36, az: 0.25, el: 0.0, push: 0.03 }, fstop: 9, label: -1, open: true },
-  { len: 4.0, b0: 0.9, b1: 4.9, cam: { d: 0.30, az: 0.0, el: 0.02, push: 0.04 }, fstop: 8, label: 0, labelAt: 1.9 },
+  // lighting: the lighter comes up under the tip, the paper catches, the powder flares, the melt becomes the ball.
+  // The camera starts low on the tip (which hangs 1.8 cm lower before it burns) and rises with the burning front
+  { len: 4.6, b0: 0.0, b1: 4.6, cam: { d: 0.26, az: 0.0, el: 0.02, push: 0.03, ty0: -0.02, ty: -0.002 }, fstop: 10, label: 0, labelAt: 3.0 },
   { len: 4.2, b0: 6.0, b1: 10.2, cam: { d: 0.36, az: -0.42, el: 0.06, push: 0.02 }, fstop: 8, label: 1, labelAt: 0.5 },
   { len: 5.0, b0: 13.5, b1: 18.5, cam: { d: 0.44, az: 0.25, el: -0.02, push: 0.03 }, fstop: 9, label: 2, labelAt: 0.5 },
   // high-speed camera: 1/150 speed; each droplet leaves a short fading trail so the splitting can be followed
@@ -69,7 +71,8 @@ export class Film {
     // camera on a tripod, a slow push-in; focused on where the ball hangs
     const c = sh.cam;
     const d = c.d - c.push * u;
-    const tgt = [0, 0.003 + (c.ty || 0), 0];
+    const ty = c.ty0 !== undefined ? c.ty0 + (c.ty - c.ty0) * Math.min(1, Math.max(0, (T - 0.4) / 2.6)) : (c.ty || 0);
+    const tgt = [0, 0.003 + ty, 0];
     const pos = [tgt[0] + Math.sin(c.az) * Math.cos(c.el) * d, tgt[1] + Math.sin(c.el) * d, tgt[2] + Math.cos(c.az) * Math.cos(c.el) * d];
     const bp = this.burn.ball();
     const focus = Math.hypot(pos[0] - bp[0], pos[1] - bp[1], pos[2] - bp[2]);

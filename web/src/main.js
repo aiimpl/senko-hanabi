@@ -2,11 +2,12 @@
 //   (default)  hold it yourself: the pointer is your hand. Keep the fireball on until the last chrysanthemum.
 //   ?film      the film, in real time        ?render   the film, frame by frame for recording (window.__renderAt)
 import * as THREE from 'three';
-import { Burn, ballState, stageAt, STAGES, BURN_END, PAPER_LEN, G } from './sim.js';
+import { Burn, ballState, stageAt, STAGES, BURN_END, PAPER_LEN, G, consumed } from './sim.js';
 import { Sparks } from './sparks.js';
 import { Ball } from './ball.js';
 import { Paper } from './paper.js';
 import { Smoke } from './smoke.js';
+import { Flames } from './flame.js';
 import { Backdrop } from './backdrop.js';
 import { Post } from './post.js';
 import { blackbody } from './color.js';
@@ -28,12 +29,12 @@ let vw = W, vh = H;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(13.7, W / H, 0.01, 20);
-const sparks = new Sparks(), ball = new Ball(), paper = new Paper(), smoke = new Smoke(), backdrop = new Backdrop();
-scene.add(backdrop.mesh, paper.mesh, ball.mesh, smoke.mesh, sparks.mesh, ball.flame);
+const sparks = new Sparks(), ball = new Ball(), paper = new Paper(), smoke = new Smoke(), backdrop = new Backdrop(), flames = new Flames();
+scene.add(backdrop.mesh, paper.mesh, ball.mesh, smoke.mesh, sparks.mesh, flames.group);
 const post = new Post(renderer, W * scale, H * scale);
 
 // the look: one exposure for everything, in the same units
-const LOOK = { ball: 2.6, spark: 2.0e5, paper: 2.4e-5, smoke: 2.4e-6, exposure: 1.0, bloom: 0.045, bg: 0.35 };
+const LOOK = { ball: 0.95, spark: 2.0e5, paper: 2.4e-5, smoke: 2.4e-6, exposure: 1.0, bloom: 0.045, bg: 0.35 };
 
 function fit() {
   if (RENDER) { vw = W; vh = H; stage.style.width = W + 'px'; stage.style.height = H + 'px'; stage.style.transform = 'translate(-50%, -50%)'; }
@@ -81,19 +82,21 @@ function draw(t, S, opt = {}) {
   ball.mat.uniforms.uGain.value = LOOK.ball * (opt.ballGain || 1);
   sparks.update(burn, t, S, opt.tail || 0);
   sparks.mat.uniforms.uGain.value = LOOK.spark * (opt.sparkGain || 1);
+  ball.mat.uniforms.uEnv.value = 0.06 * Math.min(3, sparks.power * 0.9);
   sparks.mat.uniforms.uRes.value.set(vw * scale, vh * scale);
   // light from the fireball (its glow and its area) and from the sparks around it
   const ballLight = Math.pow(Math.max(heat, 0), 2.2) * (st.r / 0.0023) ** 2 * (gone ? 0 : 1);
-  const flame = st.flame * 1.6;
+  flames.update(t, opt.unlit ? { flame: 0, flare: 0, lighter: 0 } : st, bp, bp, camera);
+  const flame = flames.light;
   const light = ballLight + Math.min(3, sparks.power * 0.9) + flame;
   const bb = blackbody(1180);
   tmpC.setRGB(bb[0], bb[1], bb[2]);
-  paper.update(burn.chain(), burn.N, bp, st.r, dropped);
+  paper.update(burn.chain(), burn.N, bp, st.r, dropped, !!opt.unlit || t < 0.3, opt.unlit ? 0 : st.char, opt.unlit ? 0.025 : Math.max(0, 0.025 - consumed(t)));
   paper.mat.uniforms.uBall.value.set(bp[0], bp[1], bp[2]);
   paper.mat.uniforms.uLight.value.copy(tmpC).multiplyScalar(LOOK.paper * light);
   paper.mat.uniforms.uChar.value = opt.unlit ? -1 : st.char;
   paper.mat.uniforms.uAmb.value = opt.amb ?? 0.0025;
-  paper.mat.uniforms.uEmber.value = opt.unlit ? 0 : t < 3.4 ? Math.min(1, t / 0.4) * Math.max(0, 1 - (t - 2.4)) : 0;
+  paper.mat.uniforms.uEmber.value = opt.unlit ? 0 : st.paper * (1 - 0.7 * Math.min(1, Math.max(0, (t - 1.8) / 0.5)));
   paper.mat.uniforms.uT.value = t;
   smoke.emit(t, bp, gone || opt.unlit ? 0 : (st.flame > 0.05 ? 2.5 : 0.4 + 0.8 * Math.min(1, sparks.power * 0.6)) * (dropped ? 0 : 1));
   smoke.update(t, bp, LOOK.smoke * light);
@@ -142,7 +145,7 @@ if (FILM) mode = new Film(ctx);
 else mode = new Game(ctx);
 ctx.sound = new Sound(burn);
 
-window.__burn = burn;
+window.__burn = burn; window.__ball = ball; window.__direct = () => { renderer.setRenderTarget(null); renderer.render(scene, camera); };
 window.__ready = true;
 if (!RENDER) {
   let last = performance.now();

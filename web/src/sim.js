@@ -15,7 +15,21 @@ export const STAGES = [
 export const BURN_END = 46.5;
 export const G = 9.81;
 export const BALL_R = 0.0023;
-export const PAPER_LEN = 0.11;
+export const PAPER_LEN = 0.11;      // from the hand to the fireball, once the tip has burnt away
+export const TIP_BURN = 0.018;       // the powder-filled tip that burns away while it is lit
+// lighting: a lighter flame touches the tip (0 - 0.7 s); the paper catches and the flame climbs the tip;
+// the powder inside flares (1.0 - 2.2 s), sputtering; the flame dies and the melt pulls itself into a ball
+export function consumed(t) {
+  const u = Math.min(1, Math.max(0, (t - 0.3) / 2.2));
+  return TIP_BURN * u * u * (3 - 2 * u);
+}
+export function ignition(t) {
+  const sm = (a, b, x) => { const u = Math.min(1, Math.max(0, (x - a) / (b - a))); return u * u * (3 - 2 * u); };
+  const lighter = sm(0.0, 0.12, t) * (1 - sm(0.55, 0.9, t));
+  const paper = sm(0.25, 0.6, t) * (1 - sm(2.2, 2.75, t));
+  const flare = sm(0.95, 1.25, t) * (1 - sm(1.9, 2.4, t));
+  return { lighter, paper, flare, flame: Math.min(1.8, paper * 0.9 + flare * 0.9) };
+}
 
 export function stageAt(t) {
   let s = -1;
@@ -41,13 +55,16 @@ export function rng(seed) {
 //  kids  children per burst        k     air drag (1/s); low drag + long life = the drooping willow
 const KEYS = [
   { t: 0.0, rate: 0, gmax: 0, v0: 0.5, vk: 0.6, life: 0.016, kids: 2, k: 30 },
+  { t: 0.95, rate: 0, gmax: 0, v0: 0.9, vk: 0.6, life: 0.012, kids: 2, k: 30 },
+  { t: 1.3, rate: 34, gmax: 0.3, v0: 0.9, vk: 0.7, life: 0.012, kids: 2, k: 30 }, // the powder sputters as it flares
+  { t: 2.0, rate: 22, gmax: 0.2, v0: 0.8, vk: 0.6, life: 0.012, kids: 2, k: 30 },
   { t: 2.5, rate: 0, gmax: 0, v0: 0.5, vk: 0.6, life: 0.016, kids: 2, k: 30 },
   { t: 3.2, rate: 4, gmax: 0.6, v0: 0.7, vk: 0.8, life: 0.020, kids: 2.5, k: 28 },
   { t: 6.0, rate: 9, gmax: 2.2, v0: 1.0, vk: 1.3, life: 0.026, kids: 3.2, k: 24 },
-  { t: 9.0, rate: 26, gmax: 3.2, v0: 1.2, vk: 1.6, life: 0.024, kids: 4.0, k: 21 },
-  { t: 12.5, rate: 300, gmax: 6.0, v0: 1.3, vk: 1.8, life: 0.022, kids: 5.0, k: 19 },
-  { t: 20.0, rate: 560, gmax: 8.0, v0: 1.35, vk: 1.9, life: 0.022, kids: 5.4, k: 18 },
-  { t: 25.5, rate: 260, gmax: 6.0, v0: 1.25, vk: 1.7, life: 0.024, kids: 4.6, k: 16 },
+  { t: 9.0, rate: 26, gmax: 3.2, v0: 1.15, vk: 1.15, life: 0.022, kids: 4.0, k: 21 },
+  { t: 12.5, rate: 380, gmax: 6.0, v0: 1.2, vk: 1.2, life: 0.020, kids: 5.0, k: 19 },
+  { t: 20.0, rate: 620, gmax: 8.0, v0: 1.25, vk: 1.25, life: 0.020, kids: 5.4, k: 18 },
+  { t: 25.5, rate: 320, gmax: 6.0, v0: 1.2, vk: 1.15, life: 0.022, kids: 4.6, k: 16 },
   { t: 28.0, rate: 55, gmax: 1.6, v0: 1.15, vk: 0.9, life: 0.080, kids: 2.6, k: 6.5 },
   { t: 34.0, rate: 28, gmax: 1.0, v0: 1.0, vk: 0.8, life: 0.070, kids: 2.4, k: 7.5 },
   { t: 37.0, rate: 70, gmax: 1.3, v0: 0.65, vk: 0.8, life: 0.016, kids: 3.6, k: 30 },
@@ -71,19 +88,27 @@ export function profile(t) {
 
 // fireball size and brightness over the burn
 export function ballState(t) {
-  const grow = Math.min(1, Math.max(0, (t - 1.3) / 1.4));
+  const grow = Math.min(1, Math.max(0, (t - 1.7) / 1.3));
   const g = grow * grow * (3 - 2 * grow);
   const late = Math.min(1, Math.max(0, (t - 36) / 10));
-  const r = BALL_R * (0.25 + 0.75 * g) * (1 - 0.18 * late);
-  const flame = t < 2.8 ? Math.min(1, t / 0.25) * Math.min(1, Math.max(0, (2.8 - t) / 0.8)) : 0;
+  // the melt first shows inside the flame as a small glowing bead (~1.6 s), then gathers into the ball
+  const appear = Math.min(1, Math.max(0, (t - 1.5) / 0.4));
+  const r = BALL_R * (0.25 + 0.75 * g) * (1 - 0.18 * late) * appear;
+  const ig = ignition(t);
+  const flame = ig.flame;
   // glow: 880 C through the sparking stages, cooling at the very end
   const end = Math.min(1, Math.max(0, (t - (BURN_END - 2.5)) / 2.5));
-  const heat = g * (1 - 0.75 * end * end);
+  // the melt glows from the moment it shows (it is born in the flame), then settles at the fireball's heat
+  const heat = Math.max(g, 0.75 * appear) * (1 - 0.75 * end * end);
   const stretch = 1 + 0.16 * Math.min(1, Math.max(0, (t - 14) / 10)) - 0.1 * late; // spindle-shaped later on
-  return { r, flame, heat, stretch, char: 0.004 + 0.018 * Math.min(1, t / 2.6) };
+  // just formed, the drop is a lumpy blob that pulls itself round; in the bud it glows redder (pink-red in photos)
+  const blob = 1 - Math.min(1, Math.max(0, (t - 2.0) / 1.6));
+  const cool = 170 * (1 - Math.min(1, Math.max(0, (t - 3.5) / 4.5)));
+  // the paper above the burning front is charred black (about 1.5 cm once the ball has formed)
+  return { r, flame, lighter: ig.lighter, paper: ig.paper, flare: ig.flare, heat, stretch, blob, cool, char: 0.014 * Math.min(1, Math.max(0, (t - 0.3) / 2.3)) };
 }
 
-const MAXD = 60000;
+const MAXD = 140000;
 export class Burn {
   constructor({ seed = 7, dropAt = BURN_END + 0.6 } = {}) {
     this.seed = seed;
@@ -105,12 +130,12 @@ export class Burn {
     // paper chain
     const N = 22;
     this.N = N;
-    this.rest = PAPER_LEN / (N - 1);
+    this.rest = (PAPER_LEN + TIP_BURN) / (N - 1);
     this.p = new Float64Array(N * 3); this.q = new Float64Array(N * 3);
     this.anchor = [0, PAPER_LEN, 0];
     this.anchorPrev = [0, PAPER_LEN, 0];
     for (let i = 0; i < N; i++) {
-      const y = PAPER_LEN - i * this.rest;
+      const y = PAPER_LEN - i * this.rest;  // unlit, the tip hangs TIP_BURN lower
       this.p[i * 3 + 1] = y; this.q[i * 3 + 1] = y;
       // the paper is never quite straight
       const x = 0.0016 * Math.sin(i * 0.37) * (i / N);
@@ -144,6 +169,7 @@ export class Burn {
     // anchor moves kinematically, interpolated within the step
     p[0] = this.anchor[0]; p[1] = this.anchor[1]; p[2] = this.anchor[2];
     const bs = ballState(t);
+    this.rest = (PAPER_LEN + TIP_BURN - consumed(t)) / (N - 1);
     const mb = 0.06e-3 + 0.05e-3 * (bs.r / BALL_R) ** 3; // kg: the molten ball (~0.1 g of powder, minus the gas)
     const mp = 0.004e-3; // per segment of paper
     const damp = 0.9993;
@@ -240,18 +266,18 @@ export class Burn {
     const i = this.n++;
     this.x0.set(x, i * 3); this.v0.set(v, i * 3);
     this.tb[i] = t; this.td[i] = t + life; this.k[i] = k;
-    this.P[i] = size * size; this.burst[i] = willBurst ? 1 : 0; this.gen[i] = g;
+    this.P[i] = Math.pow(size, 0.65); this.burst[i] = willBurst ? 1 : 0; this.gen[i] = g;
     if (!willBurst) return;
     // burst: position and velocity at the moment it splits
     const e = Math.exp(-k * life), vt = -G / k;
     const xe = [x[0] + v[0] * (1 - e) / k, x[1] + vt * life + (v[1] - vt) * (1 - e) / k, x[2] + v[2] * (1 - e) / k];
     const ve = [v[0] * e, vt + (v[1] - vt) * e, v[2] * e];
     if (g === 0 || R() < 0.15) this.events.push({ t: t + life, e: size, x: xe });
-    const nk = Math.max(2, Math.round((pr.kids + 2.2 - g * 0.7) * (0.6 + 0.8 * R())));
-    const cs = size * 0.62;
+    const nk = Math.max(2, Math.round((pr.kids + 3.2 - g * 0.8) * (0.6 + 0.8 * R())));
+    const cs = size * 0.55;
     for (let c = 0; c < nk; c++) {
       const u = R() * 2 - 1, ph = R() * Math.PI * 2, s = Math.sqrt(1 - u * u);
-      const sp = pr.vk * (0.5 + 0.7 * R()) * Math.pow(0.9, g);
+      const sp = pr.vk * (0.4 + 0.6 * R()) * Math.pow(0.85, g);
       const cv = [ve[0] * 0.3 + s * Math.cos(ph) * sp, ve[1] * 0.3 + u * sp, ve[2] * 0.3 + s * Math.sin(ph) * sp];
       this.tree(xe, cv, t + life, g + 1, pr, cs, budget);
     }

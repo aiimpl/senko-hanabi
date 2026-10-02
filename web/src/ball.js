@@ -1,6 +1,5 @@
 // The fireball (hi-dama): a drop of molten potassium salts hanging from the paper, glowing at about 880 C.
 // Its surface boils: gas bubbles rise and burst (that is where the sparks come from), so it shimmers and wobbles.
-// Also the small flame of the paper and powder when it is first lit.
 import * as THREE from 'three';
 import { blackbodyGLSL } from './color.js';
 
@@ -18,74 +17,84 @@ export { NOISE };
 
 export class Ball {
   constructor() {
-    const geo = new THREE.SphereGeometry(1, 64, 48);
+    const geo = new THREE.SphereGeometry(1, 96, 72);
     this.mat = new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 }, uHeat: { value: 1 }, uGain: { value: 1 }, uStretch: { value: 1 }, uSeed: { value: 0 } },
+      extensions: { derivatives: true },
+      uniforms: {
+        uT: { value: 0 }, uHeat: { value: 1 }, uGain: { value: 1 }, uStretch: { value: 1 }, uSeed: { value: 0 },
+        uNeck: { value: 0.3 }, uCool: { value: 0 }, uEnv: { value: 0 }, uBlob: { value: 0 },
+      },
       vertexShader: /* glsl */`
-        uniform float uT, uStretch, uSeed; varying vec3 vN; varying vec3 vL; varying vec3 vV;
+        uniform float uT, uStretch, uSeed, uNeck, uBlob; varying vec3 vL; varying vec3 vV; varying float vNeck;
         ${NOISE}
         void main(){
           vec3 p = position;
-          // wobble: the surface of a boiling drop
-          float w = noise(p * 2.2 + vec3(0.0, uT * 9.0, uSeed)) * 0.07 + noise(p * 5.0 + uT * 23.0) * 0.025;
-          p *= 1.0 + w;
-          p.y *= uStretch; p.y -= (uStretch - 1.0) * 0.6; // a spindle that hangs down
+          // a drop hanging from the paper: the top of the sphere is drawn up into a neck around the paper (a meniscus)
+          float phi = acos(clamp(p.y, -1.0, 1.0));
+          const float PHI0 = 0.78;
+          float s = clamp(1.0 - phi / PHI0, 0.0, 1.0);
+          vec2 dir = length(p.xz) > 1e-5 ? normalize(p.xz) : vec2(1.0, 0.0);
+          // blend from the sphere itself (same angle) toward the neck, starting with zero slope so there is no crease
+          float k = s * s * s * (s * (s * 6.0 - 15.0) + 10.0);
+          float rxz = mix(sin(phi), uNeck, k);
+          float y = mix(cos(phi), 1.1, k);
+          p = vec3(dir.x * rxz, y, dir.y * rxz);
+          vNeck = s;
+          // the surface of a boiling drop: slow wobble, small fast ripples; when it first forms it is a lumpy blob
+          float w = noise(p * 2.0 + vec3(0.0, uT * 7.0, uSeed)) * 0.022 + noise(p * 5.0 + uT * 19.0) * 0.005;
+          w += uBlob * (noise(p * 1.3 + vec3(uT * 1.5, 0.0, 3.0)) * 0.16 + noise(p * 2.6 - uT * 3.0) * 0.04);
+          p *= 1.0 + w * (1.0 - s);
+          p.y = p.y * uStretch - (uStretch - 1.0) * 0.6; // spindle-shaped late in the burn
           vL = position;
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
-          vN = normalize(normalMatrix * normal); vV = -mv.xyz;
+          vV = mv.xyz;
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: /* glsl */`
-        uniform float uT, uHeat, uGain; varying vec3 vN; varying vec3 vL; varying vec3 vV;
+        uniform float uT, uHeat, uGain, uCool, uEnv; varying vec3 vL; varying vec3 vV; varying float vNeck;
         ${blackbodyGLSL}
         ${NOISE}
         void main(){
-          vec3 n = normalize(vN), v = normalize(vV);
+          // normal from the surface itself (the drop is displaced, so the sphere's normal would be wrong)
+          vec3 n = normalize(cross(dFdx(vV), dFdy(vV)));
+          vec3 v = normalize(-vV);
+          if (dot(n, v) < 0.0) n = -n;
           float mu = clamp(dot(n, v), 0.0, 1.0);
-          // cells of hotter and cooler melt that churn, and bright pits where bubbles burst
-          float c = fbm(vL * 3.0 + vec3(0.0, -uT * 4.0, uT * 1.3));
-          float pits = smoothstep(0.42, 0.62, noise(vL * 9.0 + uT * 31.0));
-          float T = 1150.0 + c * 70.0 + pits * 90.0;
-          T = mix(800.0, T, uHeat);
-          float lum = (0.78 + 0.22 * mu) * (1.0 + c * 0.5 + pits * 0.9) * pow(uHeat, 2.2);
-          // a thin skin of dark slag near the paper
-          float crust = smoothstep(0.55, 0.95, vL.y) * 0.55;
-          lum *= 1.0 - crust;
-          gl_FragColor = vec4(blackbody(T) * lum * uGain, 1.0);
+          // a glowing liquid you see into: through the middle you look deep into the hottest melt (pale yellow-white),
+          // at the edge only through a thin skin, which shows as a ring of red-orange (as in photographs)
+          float depth = 1.0 - exp(-5.0 * mu - 0.9);
+          float churn = fbm(vL * 2.6 + vec3(0.0, -uT * 3.0, uT * 1.1));
+          float cells = fbm(vL * 6.0 + vec3(uT * 2.0, uT * 5.0, 0.0));
+          // hottest low in the drop, where the melt is thickest and the droplets leave; it drifts as it boils
+          vec3 hotDir = normalize(vec3(0.25 * sin(uT * 1.3) - 0.2, -0.8, 0.5 + 0.2 * cos(uT * 0.9)));
+          float hot = pow(max(dot(normalize(vL), hotDir), 0.0), 3.0);
+          float core = smoothstep(0.25, 0.92, mu);
+          float T = mix(880.0, 1240.0, core) + 70.0 * hot * core + 30.0 * churn + 15.0 * cells - uCool;
+          T = mix(760.0, T, uHeat);
+          float lum = depth * (0.8 + 0.9 * hot + 0.15 * churn) * pow(uHeat, 2.2);
+          // the red rim stays bright: the skin is hot too, only seen through less melt
+          lum = mix(lum, 0.55 * pow(uHeat, 2.2), (1.0 - core) * 0.6);
+          // bubbles reach the surface and burst: tiny bright pits
+          float pits = smoothstep(0.55, 0.78, noise(vL * 11.0 + uT * 37.0));
+          lum *= 1.0 + pits * 0.6;
+          // a skin of cooler slag where it hangs from the paper
+          float neck = smoothstep(0.15, 0.9, vNeck);
+          T -= neck * 240.0; lum *= 1.0 - 0.65 * neck;
+          vec3 col = blackbody(T) * lum * pow(T / 1200.0, 4.0);
+          // the wet, glassy surface reflects the light around it (Fresnel): sparks, and a bright highlight
+          vec3 r = reflect(-v, n);
+          float fres = 0.04 + 0.96 * pow(1.0 - mu, 5.0);
+          float env = 0.3 + 0.7 * smoothstep(0.2, 0.9, fbm(r * 3.0 + uT * 6.0));
+          col += blackbody(1350.0) * fres * env * uEnv;
+          vec3 Ldir = normalize(vec3(0.45, 0.65, 0.6));
+          float spec = pow(max(dot(r, Ldir), 0.0), 140.0) * 1.4 + pow(max(dot(r, Ldir), 0.0), 18.0) * 0.08;
+          col += vec3(1.0, 0.92, 0.8) * spec * (0.3 + uEnv * 6.0) * pow(uHeat, 2.0);
+          col *= uGain;
+          gl_FragColor = vec4(any(isnan(col)) ? vec3(0.0) : min(col, vec3(2000.0)), 1.0);
         }`,
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.renderOrder = 2;
-
-    // flame of the paper when lit: a small teardrop of soot glow, blue at the root
-    this.flameMat = new THREE.ShaderMaterial({
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-      uniforms: { uT: { value: 0 }, uAmt: { value: 0 }, uGain: { value: 1 } },
-      vertexShader: /* glsl */`varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: /* glsl */`
-        uniform float uT, uAmt, uGain; varying vec2 vUv;
-        ${blackbodyGLSL}
-        ${NOISE}
-        void main(){
-          vec2 p = vUv * 2.0 - 1.0; // x across, y up (-1 bottom)
-          float y = p.y * 0.5 + 0.5;
-          // burning paper: a ragged, licking flame with several tongues, pulled up by its own heat
-          vec2 q = vec2(p.x * 1.6, y * 2.2 - uT * 3.2);
-          float turb = fbm(vec3(q * 2.3, uT * 1.7)) + 0.5 * fbm(vec3(q * 5.0 + 3.0, uT * 3.1));
-          float wob = turb * 0.35 * y;
-          float wdt = 0.62 * pow(max(0.0, 1.0 - y), 0.7) * (0.35 + 0.65 * smoothstep(0.0, 0.3, y));
-          float d = abs(p.x - wob) / max(wdt, 1e-3);
-          float body = smoothstep(1.0, 0.0, d + turb * 0.6 * y) * smoothstep(0.0, 0.1, y);
-          body *= smoothstep(1.0, 0.45, y + 0.35 * turb);
-          float T = 1250.0 + 380.0 * body * (1.0 - y);
-          vec3 col = blackbody(T) * pow(body, 1.3) * 7.0;
-          // the blue root where the gas first burns
-          col += vec3(0.08, 0.16, 0.6) * smoothstep(0.22, 0.0, y) * smoothstep(1.0, 0.2, d) * 0.9;
-          gl_FragColor = vec4(col * uAmt * uGain, 1.0);
-        }`,
-    });
-    this.flame = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.flameMat);
-    this.flame.renderOrder = 11;
   }
 
   // fall: speed of the falling ball (m/s) and the shutter, so a falling ball is drawn as the streak it leaves
@@ -96,14 +105,9 @@ export class Ball {
     this.mat.uniforms.uT.value = t;
     this.mat.uniforms.uHeat.value = Math.max(0.0001, st.heat * Math.pow(st.r / (st.r + blur * 0.5), 0.45));
     this.mat.uniforms.uStretch.value = dropped ? 1 : st.stretch;
+    this.mat.uniforms.uNeck.value = dropped ? 0.05 : Math.min(0.6, 0.00062 / Math.max(st.r, 1e-4));
+    this.mat.uniforms.uBlob.value = st.blob || 0;
+    this.mat.uniforms.uCool.value = st.cool || 0;
     this.mesh.visible = st.r > 0.0004;
-    this.flameMat.uniforms.uT.value = t;
-    this.flameMat.uniforms.uAmt.value = st.flame;
-    this.flame.visible = st.flame > 0.001;
-    // the flame stands up from the tip of the paper, facing the camera
-    const h = 0.013 * (0.5 + 0.5 * st.flame);
-    this.flame.scale.set(h * 0.6, h, 1);
-    this.flame.position.set(pos[0], pos[1] + h * 0.40 - 0.002, pos[2]);
-    this.flame.quaternion.copy(cam.quaternion);
   }
 }
